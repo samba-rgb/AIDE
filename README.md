@@ -31,12 +31,135 @@ A powerful, database-driven terminal tool for managing tasks, commands, and file
 
 ### Build from Source
 ```bash
-git clone <your-repo-url>
-cd aide
+git clone https://github.com/samba-rgb/AIDE.git
+cd AIDE
 cargo build --release
 ```
 
 The binary will be available at `target/release/aide`.
+
+### Adding to PATH (macOS)
+
+After building the release version, you have several options to make `aide` available system-wide:
+
+#### Option 1: Copy to /usr/local/bin (Recommended)
+```bash
+# Copy the binary to a directory that's already in PATH
+sudo cp target/release/aide /usr/local/bin/
+
+# Make it executable (usually already set)
+sudo chmod +x /usr/local/bin/aide
+
+# Verify installation
+aide --help
+```
+
+#### Option 2: Create a symlink to /usr/local/bin
+```bash
+# Create a symbolic link instead of copying
+sudo ln -s $(pwd)/target/release/aide /usr/local/bin/aide
+
+# Verify installation
+aide --help
+```
+
+#### Option 3: Add project directory to PATH
+Add the following line to your shell configuration file:
+
+**For zsh (default on macOS Catalina+):**
+```bash
+echo 'export PATH="$PATH:$(pwd)/target/release"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**For bash:**
+```bash
+echo 'export PATH="$PATH:$(pwd)/target/release"' >> ~/.bash_profile
+source ~/.bash_profile
+```
+
+**For fish shell:**
+```bash
+echo 'set -gx PATH $PATH $(pwd)/target/release' >> ~/.config/fish/config.fish
+```
+
+#### Option 4: Install to ~/.local/bin
+```bash
+# Create the directory if it doesn't exist
+mkdir -p ~/.local/bin
+
+# Copy the binary
+cp target/release/aide ~/.local/bin/
+
+# Add to PATH if not already there
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+#### Option 5: Using Homebrew (for distribution)
+If you plan to distribute via Homebrew later:
+```bash
+# Create a formula (advanced users)
+# This would be for when you create a Homebrew tap
+brew install your-username/tap/aide
+```
+
+### Verification
+After installation, verify aide is working:
+```bash
+# Check if aide is in PATH
+which aide
+
+# Test the tool
+aide --help
+
+# Check version info
+aide --version  # (if you add version info later)
+```
+
+### Uninstallation
+To remove aide from your system:
+
+**If installed to /usr/local/bin:**
+```bash
+sudo rm /usr/local/bin/aide
+```
+
+**If using symlink:**
+```bash
+sudo unlink /usr/local/bin/aide
+```
+
+**If added to PATH via shell config:**
+Remove the export line from your shell configuration file and restart terminal.
+
+### Troubleshooting Installation
+
+**Permission denied errors:**
+```bash
+# Make sure the binary has execute permissions
+chmod +x target/release/aide
+```
+
+**Command not found after installation:**
+```bash
+# Reload your shell configuration
+source ~/.zshrc  # or ~/.bash_profile
+
+# Or restart your terminal
+
+# Check if the directory is in PATH
+echo $PATH
+```
+
+**macOS security warning:**
+If macOS shows "aide cannot be opened because it is from an unidentified developer":
+```bash
+# Remove quarantine attribute
+xattr -d com.apple.quarantine target/release/aide
+
+# Or allow in System Preferences > Security & Privacy
+```
 
 ## Quick Start
 
