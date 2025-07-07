@@ -38,7 +38,7 @@ cargo build --release
 
 The binary will be available at `target/release/aide`.
 
-### Adding to PATH (macOS)
+### Adding to PATH (Linux/macOS)
 
 After building the release version, you have several options to make `aide` available system-wide:
 
@@ -63,27 +63,7 @@ sudo ln -s $(pwd)/target/release/aide /usr/local/bin/aide
 aide --help
 ```
 
-#### Option 3: Add project directory to PATH
-Add the following line to your shell configuration file:
-
-**For zsh (default on macOS Catalina+):**
-```bash
-echo 'export PATH="$PATH:$(pwd)/target/release"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-**For bash:**
-```bash
-echo 'export PATH="$PATH:$(pwd)/target/release"' >> ~/.bash_profile
-source ~/.bash_profile
-```
-
-**For fish shell:**
-```bash
-echo 'set -gx PATH $PATH $(pwd)/target/release' >> ~/.config/fish/config.fish
-```
-
-#### Option 4: Install to ~/.local/bin
+#### Option 3: Install to ~/.local/bin
 ```bash
 # Create the directory if it doesn't exist
 mkdir -p ~/.local/bin
@@ -92,16 +72,28 @@ mkdir -p ~/.local/bin
 cp target/release/aide ~/.local/bin/
 
 # Add to PATH if not already there
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### Option 4: Add project directory to PATH
+Add the following line to your shell configuration file:
+
+**For bash:**
+```bash
+echo 'export PATH="$PATH:$(pwd)/target/release"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**For zsh:**
+```bash
+echo 'export PATH="$PATH:$(pwd)/target/release"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-#### Option 5: Using Homebrew (for distribution)
-If you plan to distribute via Homebrew later:
+**For fish shell:**
 ```bash
-# Create a formula (advanced users)
-# This would be for when you create a Homebrew tap
-brew install your-username/tap/aide
+echo 'set -gx PATH $PATH $(pwd)/target/release' >> ~/.config/fish/config.fish
 ```
 
 ### Verification
@@ -113,8 +105,8 @@ which aide
 # Test the tool
 aide --help
 
-# Check version info
-aide --version  # (if you add version info later)
+# List available commands
+aide --help
 ```
 
 ### Uninstallation
@@ -144,7 +136,7 @@ chmod +x target/release/aide
 **Command not found after installation:**
 ```bash
 # Reload your shell configuration
-source ~/.zshrc  # or ~/.bash_profile
+source ~/.bashrc  # or ~/.zshrc
 
 # Or restart your terminal
 
@@ -152,21 +144,12 @@ source ~/.zshrc  # or ~/.bash_profile
 echo $PATH
 ```
 
-**macOS security warning:**
-If macOS shows "aide cannot be opened because it is from an unidentified developer":
-```bash
-# Remove quarantine attribute
-xattr -d com.apple.quarantine target/release/aide
-
-# Or allow in System Preferences > Security & Privacy
-```
-
 ## Quick Start
 
 ### 1. Create Your First Aide
 ```bash
 # Create a text-based aide for storing commands
-aide create command text
+aide create commands text
 
 # Create a file-based aide for work logs
 aide create work_log file
@@ -174,11 +157,11 @@ aide create work_log file
 
 ### 2. Add Content
 ```bash
-# Add a command to text aide
-aide add command "ssh to server" "ssh user@server.com"
+# Add content to text aide (stores as timestamped entry)
+aide add commands "ssh user@server.com"
 
-# Add a file to file aide (creates actual file)
-aide add work_log "daily_standup" "Today's standup notes"
+# Add content to file aide (appends to ~/.aide/work_log.txt)
+aide add work_log "Today's standup notes and meeting updates"
 ```
 
 ### 3. Create Tasks
@@ -215,10 +198,18 @@ aide task-log-update <task_name> <text>  # Add timestamped log entry
 ```bash
 # Aide management
 aide create <name> <type>                # Create aide (type: text|file)
-aide add <name> <input> [output]         # Add content to aide
+aide add <name> <content>                # Add content to aide
+aide add <name> -p <file_path>           # Add content from file to aide
+aide write <name>                        # Open file aide in vim/vi/nano editor
 aide aide-list                          # List all aides
 aide search <text>                       # Fuzzy search content
 aide command <text>                      # Search by aide name + content
+```
+
+### System Commands
+```bash
+aide reset                               # Reset all data (WARNING: Deletes all tasks and aides)
+aide clear                               # Clear all data (same as reset)
 ```
 
 ### TUI Commands
@@ -253,6 +244,21 @@ aide                                     # Default: launch TUI
 - **Enter**: New line
 - **Backspace**: Delete character
 
+## How Aides Work
+
+### Text Aides
+Text aides store content as timestamped entries in the database:
+- Each `aide add` command creates a new timestamped entry
+- Perfect for storing commands, snippets, and quick references
+- Search through all entries with `aide search`
+
+### File Aides
+File aides create actual files on your filesystem:
+- Content is stored in `~/.aide/{aide_name}.txt`
+- Each `aide add` command appends timestamped content to the file
+- Files can be edited with any external editor
+- Perfect for logs, notes, and documentation
+
 ## File Structure
 
 Aide creates the following directory structure in your home directory:
@@ -263,9 +269,8 @@ Aide creates the following directory structure in your home directory:
 ├── tasks/                # Task log files
 │   ├── task1.txt
 │   └── task2.txt
-└── work_log/            # File aide directories
-    ├── file1.txt
-    └── file2.txt
+├── work_log.txt          # File aide content
+└── commands.txt          # Another file aide
 ```
 
 ### Task Files
@@ -274,17 +279,25 @@ Located in `~/.aide/tasks/`, each task gets its own log file:
 Task: implement_authentication
 Status: in_progress
 Priority: 2
-Created: 2025-07-06 16:30:24
+Created: 2025-07-07 10:30:24
 
 --- Task Log ---
-[2025-07-06 17:29:17] Completed user login flow
-[2025-07-06 18:15:32] Working on password validation
+[2025-07-07 11:29:17] Completed user login flow
+[2025-07-07 12:15:32] Working on password validation
 ```
 
-### File Aides
-Each file aide creates a directory in `~/.aide/` containing actual files:
-- `aide add work_log "meeting_notes" "content"` → `~/.aide/work_log/meeting_notes.txt`
-- Files are real filesystem files you can access with any editor
+### File Aide Files
+File aides create single files in `~/.aide/`:
+```
+Aide: work_log
+Type: file
+Created: 2025-07-07 10:30:24
+
+--- Entries ---
+
+[2025-07-07 11:30:00] Today's standup notes and meeting updates
+[2025-07-07 14:15:22] Completed sprint planning session
+```
 
 ## Database Schema
 
@@ -298,8 +311,8 @@ Aide uses SQLite with the following tables:
 ### `data`
 - `id`: Primary key
 - `aide_id`: Foreign key to aides
-- `input_text`: Entry name/description
-- `command_output`: Content/command
+- `input_text`: Entry content
+- `command_output`: Timestamped content
 
 ### `tasks`
 - `id`: Primary key
@@ -317,18 +330,42 @@ Aide uses SQLite with the following tables:
 aide task-log-update "current_sprint" "Daily standup: working on API endpoints"
 
 # Store useful commands
-aide add command "check docker logs" "docker logs -f container_name"
+aide add commands "docker logs -f container_name"
 
 # Create meeting notes
-aide add work_log "team_meeting_2025_07_06" "Discussed Q3 roadmap and priorities"
+aide add work_log "Team meeting 2025-07-07: Discussed Q3 roadmap and priorities"
 
 # Update task status
 aide task-status "api_development" "in_progress"
 
 # Quick search
 aide search "docker"
-# Output: Found match in aide 'command': check docker logs
-#         Output: docker logs -f container_name
+# Output: Found match in aide 'commands': docker logs -f container_name
+#         Output: [2025-07-07 10:30:24] docker logs -f container_name
+```
+
+### Text Aide Usage
+```bash
+# Create and populate a commands aide
+aide create commands text
+aide add commands "ssh user@production-server.com"
+aide add commands "docker ps -a"
+aide add commands "tail -f /var/log/nginx/access.log"
+
+# Search for specific commands
+aide search "ssh"
+aide search "docker"
+```
+
+### File Aide Usage
+```bash
+# Create and populate a meeting notes aide
+aide create meeting_notes file
+aide add meeting_notes "Weekly team sync - discussed new features"
+aide add meeting_notes "Sprint planning - estimated 45 story points"
+
+# The content is stored in ~/.aide/meeting_notes.txt
+# You can also edit it directly: vim ~/.aide/meeting_notes.txt
 ```
 
 ### TUI Workflow
@@ -349,7 +386,7 @@ Aide automatically creates:
 ### File Locations
 - Database: `~/.aide/.aide.db`
 - Task files: `~/.aide/tasks/`
-- File aide directories: `~/.aide/{aide_name}/`
+- File aide content: `~/.aide/{aide_name}.txt`
 
 ## Troubleshooting
 
@@ -362,10 +399,13 @@ A: Ensure your terminal supports UTF-8 and has adequate size (minimum 80x24)
 A: Check write permissions in your home directory
 
 **Q: Search not finding content**
-A: Search uses fuzzy matching - try partial keywords
+A: Search uses fuzzy matching - try partial keywords or different terms
 
 **Q: Task log updates not appearing**
 A: Run `aide task-list` to verify task exists, or use TUI refresh (r key)
+
+**Q: "Aide not found" errors**
+A: Aide uses fuzzy matching - if you get a suggestion, type 'y' to accept it
 
 ### Debug Mode
 View raw data:
@@ -373,6 +413,20 @@ View raw data:
 aide aide-list    # See all aides and entry counts
 aide task-list    # See all tasks with metadata
 ```
+
+## Advanced Features
+
+### Fuzzy Matching
+Aide uses TF-IDF based fuzzy matching for task and aide names:
+- Typos are automatically corrected with user confirmation
+- Similar names are suggested when exact matches aren't found
+- Threshold-based matching ensures relevant suggestions
+
+### Timestamped Entries
+All content added to aides is automatically timestamped:
+- Helps track when entries were created
+- Useful for logs and historical data
+- Searchable by content and timestamp
 
 ## Contributing
 
@@ -383,6 +437,7 @@ Aide is built with:
 - **ratatui**: Terminal user interface
 - **crossterm**: Cross-platform terminal manipulation
 - **fuzzy-matcher**: Fuzzy text searching
+- **chrono**: Date and time handling
 
 ## License
 
@@ -399,3 +454,5 @@ Aide is built with:
 - File creation for file-type aides
 - Task log updates with timestamps
 - Built-in text editor
+- TF-IDF based fuzzy matching
+- Reset/clear functionality
