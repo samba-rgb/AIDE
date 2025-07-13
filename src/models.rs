@@ -9,9 +9,17 @@ pub struct TaskItem {
 #[derive(Debug, Clone)]
 pub struct AideItem {
     pub name: String,
-    pub aide_type: String,
     pub input_text: String,
     pub command_output: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigItem {
+    pub key_name: String,
+    pub value: String,
+    pub description: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +28,7 @@ pub enum PopupMode {
     TaskPriority,
     TaskStatus,
     AideEdit,
+    ConfigEdit,
     TextEditor,
 }
 

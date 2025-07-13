@@ -18,21 +18,25 @@ use std::path::PathBuf;
 
 use crate::database::Database;
 use crate::editor::TextEditor;
-use crate::models::{TaskItem, AideItem, PopupMode, EditorCallback};
+use crate::models::{TaskItem, AideItem, ConfigItem, PopupMode, EditorCallback};
 
 pub struct App {
     db: Database,
     pub current_tab: usize,
     pub tasks: Vec<TaskItem>,
     pub aides: Vec<AideItem>,
+    pub configs: Vec<ConfigItem>,
     pub task_list_state: ListState,
     pub aide_list_state: ListState,
+    pub config_list_state: ListState,
     pub should_quit: bool,
     // UI state
     pub show_priority_popup: bool,
     pub show_status_popup: bool,
     pub show_aide_popup: bool,
+    pub show_config_popup: bool,
     pub input_buffer: String,
+    pub config_value_buffer: String,
     pub popup_mode: PopupMode,
     // Text editor
     pub text_editor: Option<TextEditor>,
@@ -46,13 +50,17 @@ impl App {
             current_tab: 0,
             tasks: Vec::new(),
             aides: Vec::new(),
+            configs: Vec::new(),
             task_list_state: ListState::default(),
             aide_list_state: ListState::default(),
+            config_list_state: ListState::default(),
             should_quit: false,
             show_priority_popup: false,
             show_status_popup: false,
             show_aide_popup: false,
+            show_config_popup: false,
             input_buffer: String::new(),
+            config_value_buffer: String::new(),
             popup_mode: PopupMode::None,
             text_editor: None,
             editor_save_callback: None,
@@ -64,15 +72,16 @@ impl App {
     pub fn refresh_data(&mut self) -> Result<()> {
         self.tasks = self.db.get_all_tasks()?;
         self.aides = self.db.get_all_aides()?;
+        self.configs = self.db.get_all_configs()?;
         Ok(())
     }
 
     pub fn next_tab(&mut self) {
-        self.current_tab = (self.current_tab + 1) % 2;
+        self.current_tab = (self.current_tab + 1) % 3;
     }
 
     pub fn previous_tab(&mut self) {
-        self.current_tab = if self.current_tab == 0 { 1 } else { 0 };
+        self.current_tab = if self.current_tab == 0 { 2 } else { self.current_tab - 1 };
     }
 
     pub fn next_item(&mut self) {
@@ -102,6 +111,19 @@ impl App {
                     None => 0,
                 };
                 self.aide_list_state.select(Some(i));
+            }
+            2 => {
+                let i = match self.config_list_state.selected() {
+                    Some(i) => {
+                        if i >= self.configs.len() - 1 {
+                            0
+                        } else {
+                            i + 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.config_list_state.select(Some(i));
             }
             _ => {}
         }
@@ -135,6 +157,19 @@ impl App {
                 };
                 self.aide_list_state.select(Some(i));
             }
+            2 => {
+                let i = match self.config_list_state.selected() {
+                    Some(i) => {
+                        if i == 0 {
+                            self.configs.len() - 1
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => 0,
+                };
+                self.config_list_state.select(Some(i));
+            }
             _ => {}
         }
     }
@@ -157,12 +192,26 @@ impl App {
         self.input_buffer.clear();
     }
 
+    pub fn show_config_popup(&mut self) {
+        if let Some(i) = self.config_list_state.selected() {
+            if let Some(config) = self.configs.get(i) {
+                self.show_config_popup = true;
+                self.popup_mode = PopupMode::ConfigEdit;
+                self.input_buffer.clear();
+                // Initialize with current config value
+                self.config_value_buffer = config.value.clone();
+            }
+        }
+    }
+
     pub fn close_popup(&mut self) {
         self.show_priority_popup = false;
         self.show_status_popup = false;
         self.show_aide_popup = false;
+        self.show_config_popup = false;
         self.popup_mode = PopupMode::None;
         self.input_buffer.clear();
+        self.config_value_buffer.clear();
     }
 
     pub fn handle_popup_input(&mut self, c: char) -> Result<()> {
@@ -218,6 +267,13 @@ impl App {
                     self.input_buffer.push(c);
                 }
             }
+            PopupMode::ConfigEdit => {
+                if c == '\n' || c == '\r' {
+                    self.handle_config_edit()?;
+                } else if c.is_ascii() && c != '\x08' {
+                    self.config_value_buffer.push(c);
+                }
+            }
             PopupMode::TextEditor => {
                 // Text editor input is handled separately in handle_text_editor_input
             }
@@ -229,6 +285,8 @@ impl App {
     pub fn handle_backspace(&mut self) {
         if matches!(self.popup_mode, PopupMode::AideEdit) {
             self.input_buffer.pop();
+        } else if matches!(self.popup_mode, PopupMode::ConfigEdit) {
+            self.config_value_buffer.pop();
         }
     }
 
@@ -353,56 +411,21 @@ impl App {
     pub fn edit_selected_aide(&mut self) -> Result<()> {
         if let Some(i) = self.aide_list_state.selected() {
             if let Some(aide) = self.aides.get(i) {
-                // Process the aide content to format it properly for editing
-                let formatted_content = if aide.aide_type == "file" {
-                    // For file aides, read the actual file content
-                    let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                    let aide_dir = PathBuf::from(&home_dir).join(".aide");
-                    let file_path = aide_dir.join(format!("{}.txt", aide.name));
-                    
-                    if file_path.exists() {
-                        fs::read_to_string(&file_path).unwrap_or_else(|_| {
-                            format!("# {}\n\nCreated: {}\n\n", 
-                                   aide.name, 
-                                   chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"))
-                        })
-                    } else {
+                // All aides are now files, so read the actual file content
+                let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let aide_dir = PathBuf::from(&home_dir).join(".aide");
+                let file_path = aide_dir.join(format!("{}.txt", aide.name));
+                
+                let formatted_content = if file_path.exists() {
+                    fs::read_to_string(&file_path).unwrap_or_else(|_| {
                         format!("# {}\n\nCreated: {}\n\n", 
                                aide.name, 
                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"))
-                    }
+                    })
                 } else {
-                    // For text aides, format the database content properly
-                    if aide.command_output.is_empty() {
-                        format!("# {} (Text Aide)\n\nCreated: {}\n\n--- Entries ---\n\n", 
-                               aide.name, 
-                               chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"))
-                    } else {
-                        // Parse the concatenated entries and format them nicely
-                        let inputs: Vec<&str> = aide.input_text.split("|||").collect();
-                        let outputs: Vec<&str> = aide.command_output.split("|||").collect();
-                        
-                        let mut formatted = format!("# {} (Text Aide)\n\n--- Entries ---\n\n", aide.name);
-                        
-                        for (input, output) in inputs.iter().zip(outputs.iter()) {
-                            if !input.is_empty() && !output.is_empty() {
-                                // Parse the timestamped output to extract date and content
-                                if output.starts_with('[') && output.contains(']') {
-                                    if let Some(end_bracket) = output.find(']') {
-                                        let timestamp = &output[1..end_bracket];
-                                        let content = &output[end_bracket + 2..]; // Skip "] "
-                                        formatted.push_str(&format!("{}\n* {}\n\n", timestamp, content));
-                                    } else {
-                                        formatted.push_str(&format!("{}\n\n", output));
-                                    }
-                                } else {
-                                    formatted.push_str(&format!("{}\n\n", output));
-                                }
-                            }
-                        }
-                        
-                        formatted
-                    }
+                    format!("# {}\n\nCreated: {}\n\n", 
+                           aide.name, 
+                           chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"))
                 };
                 
                 self.open_text_editor(
@@ -419,6 +442,17 @@ impl App {
         if let Some(i) = self.aide_list_state.selected() {
             if let Some(aide) = self.aides.get(i) {
                 self.db.update_aide_content(&aide.name, &self.input_buffer)?;
+                self.refresh_data()?;
+            }
+        }
+        self.close_popup();
+        Ok(())
+    }
+
+    pub fn handle_config_edit(&mut self) -> Result<()> {
+        if let Some(i) = self.config_list_state.selected() {
+            if let Some(config) = self.configs.get(i) {
+                self.db.update_config_value(&config.key_name, &self.config_value_buffer)?;
                 self.refresh_data()?;
             }
         }
@@ -500,6 +534,8 @@ fn run_app<B: ratatui::backend::Backend>(
                                 let _ = app.edit_selected_task();
                             } else if app.current_tab == 1 {
                                 let _ = app.edit_selected_aide();
+                            } else if app.current_tab == 2 {
+                                app.show_config_popup();
                             }
                         }
                         KeyCode::Char('r') => {
@@ -518,6 +554,11 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('e') => {
                             if app.current_tab == 1 {
                                 app.show_aide_popup();
+                            }
+                        }
+                        KeyCode::Char('c') => {
+                            if app.current_tab == 2 {
+                                app.show_config_popup();
                             }
                         }
                         _ => {}
@@ -539,7 +580,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(f.area());
 
-    let titles: Vec<Line> = ["Tasks", "Aides"]
+    let titles: Vec<Line> = ["Tasks", "Aides", "Configs"]
         .iter()
         .cloned()
         .map(Line::from)
@@ -560,6 +601,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     match app.current_tab {
         0 => render_tasks(f, app, chunks[1]),
         1 => render_aides(f, app, chunks[1]),
+        2 => render_configs(f, app, chunks[1]),
         _ => {}
     }
 
@@ -599,6 +641,20 @@ fn ui(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::DarkGray));
         let content = Paragraph::new(format!("Enter input text for aide:\n\n{}\n\nPress ENTER to save\nPress ESC to cancel", app.input_buffer))
+            .block(block)
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(Color::White));
+        
+        f.render_widget(content, popup_area);
+    }
+
+    if app.show_config_popup {
+        let popup_area = centered_rect(50, 20, f.area());
+        let block = Block::default()
+            .title("Edit Config Value")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::DarkGray));
+        let content = Paragraph::new(format!("Enter new value for config:\n\n{}\n\nPress ENTER to save\nPress ESC to cancel", app.config_value_buffer))
             .block(block)
             .alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().fg(Color::White));
@@ -802,20 +858,14 @@ fn render_aides(f: &mut Frame, app: &mut App, area: Rect) {
         .aides
         .iter()
         .map(|aide| {
-            let type_color = match aide.aide_type.as_str() {
-                "file" => Color::Green,
-                "text" => Color::Blue,
-                _ => Color::White,
-            };
-            
             ListItem::new(vec![Line::from(vec![
                 Span::styled(
                     format!("{} ", aide.name),
                     Style::default().fg(Color::White),
                 ),
                 Span::styled(
-                    format!("[{}]", aide.aide_type),
-                    Style::default().fg(type_color),
+                    "[file]",
+                    Style::default().fg(Color::Green),
                 ),
             ])])
         })
@@ -835,72 +885,36 @@ fn render_aides(f: &mut Frame, app: &mut App, area: Rect) {
     let selected_aide = app.aide_list_state.selected().and_then(|i| app.aides.get(i));
     
     if let Some(aide) = selected_aide {
-        let (title, content) = match aide.aide_type.as_str() {
-            "text" => {
-                let title = format!("Text Entries - {}", aide.name);
-                if aide.command_output.is_empty() {
-                    let content = "No text entries available\n\nTo add entries:\n• aide add command \"description\" \"command text\"\n\nControls:\n• Enter: Edit content\n• e: Quick edit\n• r: Refresh\n• q: Quit".to_string();
-                    (title, content)
-                } else {
-                    // Split concatenated entries
-                    let inputs: Vec<&str> = aide.input_text.split("|||").collect();
-                    let outputs: Vec<&str> = aide.command_output.split("|||").collect();
-                    
-                    let mut content = String::new();
-                    content.push_str("All Text Entries:\n");
-                    content.push_str("================\n\n");
-                    
-                    for (i, (input, output)) in inputs.iter().zip(outputs.iter()).enumerate() {
-                        if !input.is_empty() && !output.is_empty() {
-                            content.push_str(&format!("{}. {}\n", i + 1, input));
-                            content.push_str(&format!("   └─ {}\n\n", output));
-                        }
+        let title = format!("File Aide - {}", aide.name);
+        let content = if aide.command_output.is_empty() {
+            format!("No entries available\n\nTo add content:\n• aide add {} \"your content\"\n• aide add {} -p /path/to/file\n\nControls:\n• Enter: Edit file\n• e: Quick edit\n• r: Refresh\n• q: Quit", aide.name, aide.name)
+        } else {
+            // Split concatenated entries and show preview
+            let inputs: Vec<&str> = aide.input_text.split("|||").collect();
+            let outputs: Vec<&str> = aide.command_output.split("|||").collect();
+            
+            let mut content = String::new();
+            content.push_str("File Entries:\n");
+            content.push_str("=============\n\n");
+            
+            for (i, (input, output)) in inputs.iter().zip(outputs.iter()).enumerate() {
+                if !input.is_empty() {
+                    content.push_str(&format!("{}. {}\n", i + 1, input));
+                    if !output.is_empty() {
+                        // Show preview of content (first 100 chars)
+                        let preview = if output.len() > 100 {
+                            format!("{}...", &output[..100])
+                        } else {
+                            output.to_string()
+                        };
+                        content.push_str(&format!("   Preview: {}\n", preview));
                     }
-                    
-                    content.push_str("Controls:\n• Enter: Edit content\n• e: Quick edit\n• r: Refresh\n• q: Quit");
-                    (title, content)
+                    content.push_str("\n");
                 }
             }
-            "file" => {
-                let title = format!("File Entries - {}", aide.name);
-                if aide.command_output.is_empty() {
-                    let content = format!("No file entries available\n\nTo add files:\n• aide add {} \"file_name\"\n\nControls:\n• Enter: Edit file\n• e: Quick edit\n• r: Refresh\n• q: Quit", aide.name);
-                    (title, content)
-                } else {
-                    // Split concatenated entries
-                    let inputs: Vec<&str> = aide.input_text.split("|||").collect();
-                    let outputs: Vec<&str> = aide.command_output.split("|||").collect();
-                    
-                    let mut content = String::new();
-                    content.push_str("All Files:\n");
-                    content.push_str("=========\n\n");
-                    
-                    for (i, (input, output)) in inputs.iter().zip(outputs.iter()).enumerate() {
-                        if !input.is_empty() {
-                            content.push_str(&format!("{}. 📄 {}\n", i + 1, input));
-                            if !output.is_empty() {
-                                // Show preview of file content (first 100 chars)
-                                let preview = if output.len() > 100 {
-                                    format!("{}...", &output[..100])
-                                } else {
-                                    output.to_string()
-                                };
-                                content.push_str(&format!("   Preview: {}\n", preview));
-                            }
-                            content.push_str("\n");
-                        }
-                    }
-                    
-                    content.push_str("Controls:\n• Enter: Edit file\n• e: Quick edit\n• r: Refresh\n• q: Quit");
-                    (title, content)
-                }
-            }
-            _ => {
-                let title = format!("Unknown Type - {}", aide.name);
-                let content = format!("Type: {}\nInput: {}\nOutput: {}\n\nControls:\n• Enter: Edit\n• r: Refresh\n• q: Quit",
-                               aide.aide_type, aide.input_text, aide.command_output);
-                (title, content)
-            }
+            
+            content.push_str("Controls:\n• Enter: Edit file\n• e: Quick edit\n• r: Refresh\n• q: Quit");
+            content
         };
 
         let content_paragraph = Paragraph::new(content)
@@ -910,7 +924,7 @@ fn render_aides(f: &mut Frame, app: &mut App, area: Rect) {
 
         f.render_widget(content_paragraph, chunks[1]);
     } else {
-        let info_text = "No aide selected\n\nControls:\n• ↑/↓: Navigate\n• Enter: Edit aide\n• e: Quick edit\n• r: Refresh\n• q: Quit";
+        let info_text = "No aide selected\n\nControls:\n• ↑/↓: Navigate\n• Enter: Edit aide file\n• e: Quick edit\n• r: Refresh\n• q: Quit";
         
         let info_paragraph = Paragraph::new(info_text)
             .block(Block::default().borders(Borders::ALL).title("Aide Content"))
@@ -918,4 +932,55 @@ fn render_aides(f: &mut Frame, app: &mut App, area: Rect) {
 
         f.render_widget(info_paragraph, chunks[1]);
     }
+}
+
+fn render_configs(f: &mut Frame, app: &mut App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+        .split(area);
+
+    let configs: Vec<ListItem> = app
+        .configs
+        .iter()
+        .map(|config| {
+            ListItem::new(vec![Line::from(vec![
+                Span::styled(
+                    format!("{} ", config.key_name),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("={}", config.value),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ])])
+        })
+        .collect();
+
+    let configs_list = List::new(configs)
+        .block(Block::default().borders(Borders::ALL).title("Configs"))
+        .highlight_style(
+            Style::default()
+                .bg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(configs_list, chunks[0], &mut app.config_list_state);
+
+    let selected_config = app.config_list_state.selected().and_then(|i| app.configs.get(i));
+    let info_text = if let Some(config) = selected_config {
+        format!(
+            "Config: {}\nValue: {}\n\nControls:\n• Enter: Edit config value\n• r: Refresh\n• q: Quit",
+            config.key_name, config.value
+        )
+    } else {
+        "No config selected\n\nControls:\n• ↑/↓: Navigate\n• Enter: Edit config value\n• r: Refresh\n• q: Quit".to_string()
+    };
+
+    let info_paragraph = Paragraph::new(info_text)
+        .block(Block::default().borders(Borders::ALL).title("Config Info"))
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(info_paragraph, chunks[1]);
 }

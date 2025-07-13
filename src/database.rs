@@ -1,11 +1,11 @@
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::process::Command;
 use std::fs;
 use std::io::{self, Write};
 use fuzzy_matcher::FuzzyMatcher;
-use crate::models::{TaskItem, AideItem};
+use crate::models::{TaskItem, AideItem, ConfigItem};
 use crate::tfidf::{TfIdfIndex, FuzzyMatchResult, build_tfidf_index, find_fuzzy_match_in_index, FUZZY_MATCH_THRESHOLD};
 
 // Helper function to ask user for confirmation
@@ -22,6 +22,7 @@ pub struct Database {
     conn: Connection,
     task_index: Option<TfIdfIndex>,
     aide_index: Option<TfIdfIndex>,
+    config_index: Option<TfIdfIndex>,
 }
 
 impl Database {
@@ -35,8 +36,7 @@ impl Database {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS aides (
                 id INTEGER PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL,
-                aide_type TEXT NOT NULL
+                name TEXT UNIQUE NOT NULL
             )",
             [],
         )?;
@@ -64,10 +64,23 @@ impl Database {
             )",
             [],
         )?;
+
+        // Create config_data table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS config_data (
+                id INTEGER PRIMARY KEY,
+                key_name TEXT UNIQUE NOT NULL,
+                value TEXT NOT NULL,
+                description TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
         
         // Create default task_log aide if it doesn't exist
         let _ = conn.execute(
-            "INSERT OR IGNORE INTO aides (name, aide_type) VALUES ('task_log', 'file')",
+            "INSERT OR IGNORE INTO aides (name) VALUES ('task_log')",
             [],
         );
         
@@ -75,11 +88,13 @@ impl Database {
             conn,
             task_index: None,
             aide_index: None,
+            config_index: None,
         };
         
         // Build initial indexes
         db.rebuild_task_index()?;
         db.rebuild_aide_index()?;
+        db.rebuild_config_index()?;
         
         Ok(db)
     }
@@ -116,6 +131,22 @@ impl Database {
         Ok(())
     }
     
+    // Build TF-IDF index for config keys
+    pub fn rebuild_config_index(&mut self) -> Result<()> {
+        let mut stmt = self.conn.prepare("SELECT key_name FROM config_data")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })?;
+        
+        let mut config_keys = Vec::new();
+        for row in rows {
+            config_keys.push(row?);
+        }
+        
+        self.config_index = Some(build_tfidf_index(config_keys)?);
+        Ok(())
+    }
+    
     // Find fuzzy matches for tasks using TF-IDF
     pub fn find_fuzzy_task_match(&self, input_name: &str) -> Result<FuzzyMatchResult> {
         if let Some(index) = &self.task_index {
@@ -141,21 +172,44 @@ impl Database {
             })
         }
     }
-    
-    pub fn create_aide(&mut self, name: &str, aide_type: &str) -> Result<()> {
-        if aide_type != "text" && aide_type != "file" {
-            println!("Error: aide_type must be 'text' or 'file'");
-            return Ok(());
+
+    // Find fuzzy matches for config keys using TF-IDF
+    pub fn find_fuzzy_config_match(&self, input_name: &str) -> Result<FuzzyMatchResult> {
+        if let Some(index) = &self.config_index {
+            find_fuzzy_match_in_index(input_name, index)
+        } else {
+            Ok(FuzzyMatchResult {
+                exact_match: false,
+                suggested_name: None,
+                score: None,
+            })
         }
-        
+    }
+    
+    pub fn create_aide(&mut self, name: &str) -> Result<()> {
         match self.conn.execute(
-            "INSERT INTO aides (name, aide_type) VALUES (?1, ?2)",
-            [name, aide_type],
+            "INSERT INTO aides (name) VALUES (?1)",
+            [name],
         ) {
             Ok(_) => {
-                println!("Aide '{}' of type '{}' created successfully", name, aide_type);
-                // Rebuild aide index to include new aide
-                self.rebuild_aide_index()?;
+                // Create the file for this aide
+                let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let aide_dir = PathBuf::from(&home_dir).join(".aide");
+                fs::create_dir_all(&aide_dir)?;
+                
+                let file_path = aide_dir.join(format!("{}.txt", name));
+                if !file_path.exists() {
+                    let initial_content = format!("# {}\n\nCreated: {}\n\n", 
+                                                 name, 
+                                                 chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"));
+                    fs::write(&file_path, initial_content)?;
+                }
+                
+                println!("Aide '{}' created successfully", name);
+                // Use incremental update instead of full rebuild
+                if let Some(ref mut index) = self.aide_index {
+                    index.add_entity(name.to_string())?;
+                }
                 Ok(())
             }
             Err(rusqlite::Error::SqliteFailure(err, _)) 
@@ -210,13 +264,13 @@ impl Database {
             data.to_string()
         };
         
-        // First, find the aide by name and get its type
-        let (aide_id, aide_type): (i64, String) = match self.conn.query_row(
-            "SELECT id, aide_type FROM aides WHERE name = ?1",
+        // Find the aide by name
+        let aide_id: i64 = match self.conn.query_row(
+            "SELECT id FROM aides WHERE name = ?1",
             [&actual_aide_name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok(row.get(0)?),
         ) {
-            Ok((id, aide_type)) => (id, aide_type),
+            Ok(id) => id,
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 println!("Aide '{}' not found in database", actual_aide_name);
                 return Ok(());
@@ -227,31 +281,29 @@ impl Database {
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S");
         let timestamped_data = format!("[{}] {}", timestamp, content);
         
-        if aide_type == "file" {
-            // For file type aides, create/append to single file: ~/.aide/{aide_name}.txt
-            let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            let aide_dir = PathBuf::from(&home_dir).join(".aide");
-            fs::create_dir_all(&aide_dir)?;
-            
-            let file_path = aide_dir.join(format!("{}.txt", actual_aide_name));
-            
-            // Append to existing file or create new one with better formatting
-            let existing_content = if file_path.exists() {
-                fs::read_to_string(&file_path)?
-            } else {
-                format!("# {}\n\nCreated: {}\n\n", 
-                       actual_aide_name, 
-                       chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"))
-            };
-            
-            // Use the new format: date time\n* input
-            let new_entry = format!("{}\n* {}\n", timestamp, content);
-            let updated_content = format!("{}{}", existing_content, new_entry);
-            fs::write(&file_path, updated_content)?;
-            println!("Data appended to file: {}", file_path.display());
-        }
+        // Create/append to file for this aide
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let aide_dir = PathBuf::from(&home_dir).join(".aide");
+        fs::create_dir_all(&aide_dir)?;
         
-        // Store in database regardless of type
+        let file_path = aide_dir.join(format!("{}.txt", actual_aide_name));
+        
+        // Append to existing file or create new one with better formatting
+        let existing_content = if file_path.exists() {
+            fs::read_to_string(&file_path)?
+        } else {
+            format!("# {}\n\nCreated: {}\n\n", 
+                   actual_aide_name, 
+                   chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"))
+        };
+        
+        // Use the new format: date time\n* input
+        let new_entry = format!("{}\n* {}\n", timestamp, content);
+        let updated_content = format!("{}{}", existing_content, new_entry);
+        fs::write(&file_path, updated_content)?;
+        println!("Data appended to file: {}", file_path.display());
+        
+        // Store in database
         self.conn.execute(
             "INSERT INTO data (aide_id, input_text, command_output) VALUES (?1, ?2, ?3)",
             [&aide_id.to_string(), &content, &timestamped_data],
@@ -267,7 +319,7 @@ impl Database {
     
     pub fn search_by_input(&self, input_text: &str) -> Result<()> {
         let mut stmt = self.conn.prepare(
-            "SELECT d.input_text, d.command_output, a.name, a.aide_type 
+            "SELECT d.input_text, d.command_output, a.name 
              FROM data d 
              JOIN aides a ON d.aide_id = a.id"
         )?;
@@ -277,7 +329,6 @@ impl Database {
                 row.get::<_, String>(0)?,  // input_text
                 row.get::<_, String>(1)?,  // command_output
                 row.get::<_, String>(2)?,  // name
-                row.get::<_, String>(3)?,  // aide_type
             ))
         })?;
         
@@ -285,7 +336,7 @@ impl Database {
         let mut best_match: Option<(i64, String, String, String)> = None;
         
         for row in rows {
-            let (db_input, output, name, _aide_type) = row?;
+            let (db_input, output, name) = row?;
             if let Some(score) = matcher.fuzzy_match(&db_input, input_text) {
                 if best_match.is_none() || score > best_match.as_ref().unwrap().0 {
                     best_match = Some((score, db_input, output, name));
@@ -308,7 +359,7 @@ impl Database {
     
     pub fn search_by_command(&self, input_text: &str) -> Result<()> {
         let mut stmt = self.conn.prepare(
-            "SELECT d.input_text, d.command_output, a.name, a.aide_type 
+            "SELECT d.input_text, d.command_output, a.name 
              FROM data d 
              JOIN aides a ON d.aide_id = a.id"
         )?;
@@ -318,7 +369,6 @@ impl Database {
                 row.get::<_, String>(0)?,  // input_text
                 row.get::<_, String>(1)?,  // command_output
                 row.get::<_, String>(2)?,  // name
-                row.get::<_, String>(3)?,  // aide_type
             ))
         })?;
         
@@ -326,7 +376,7 @@ impl Database {
         let mut best_match: Option<(i64, String, String, String)> = None;
         
         for row in rows {
-            let (db_input, output, name, _aide_type) = row?;
+            let (db_input, output, name) = row?;
             let search_text = format!("{} {}", name, db_input);
             if let Some(score) = matcher.fuzzy_match(&search_text, input_text) {
                 if best_match.is_none() || score > best_match.as_ref().unwrap().0 {
@@ -407,8 +457,10 @@ impl Database {
             fs::write(&task_log_file, initial_content)?;
             println!("Task '{}' created successfully!", actual_task_name);
             
-            // Rebuild task index to include new task
-            self.rebuild_task_index()?;
+            // Use incremental update instead of full rebuild
+            if let Some(ref mut index) = self.task_index {
+                index.add_entity(actual_task_name.to_string())?;
+            }
         }
         
         // Open the task log file in editor
@@ -547,27 +599,25 @@ impl Database {
     
     pub fn list_aides(&self) -> Result<()> {
         let mut stmt = self.conn.prepare(
-            "SELECT a.name, a.aide_type, COUNT(d.id) as data_count 
+            "SELECT a.name, COUNT(d.id) as data_count 
              FROM aides a 
              LEFT JOIN data d ON a.id = d.aide_id 
-             GROUP BY a.name, a.aide_type 
+             GROUP BY a.name
              ORDER BY a.name"
         )?;
         
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,  // name
-                row.get::<_, String>(1)?,  // aide_type
-                row.get::<_, i32>(2)?,     // data_count
+                row.get::<_, i32>(1)?,     // data_count
             ))
         })?;
         
         println!("Aides:");
         println!("------");
         for row in rows {
-            let (name, aide_type, data_count) = row?;
-            println!("{} | Type: {} | Data entries: {}", 
-                     name, aide_type, data_count);
+            let (name, data_count) = row?;
+            println!("{} | Data entries: {}", name, data_count);
         }
         
         Ok(())
@@ -750,27 +800,7 @@ impl Database {
             }
         };
         
-        // Get aide type from database
-        let aide_type: String = match self.conn.query_row(
-            "SELECT aide_type FROM aides WHERE name = ?1",
-            [&actual_aide_name],
-            |row| row.get(0),
-        ) {
-            Ok(aide_type) => aide_type,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                println!("Aide '{}' not found in database", actual_aide_name);
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-        
-        if aide_type != "file" {
-            println!("Error: 'write' command only works with file type aides. '{}' is a {} type aide.", actual_aide_name, aide_type);
-            println!("Use 'aide add {}' to add content to text aides.", actual_aide_name);
-            return Ok(());
-        }
-        
-        // Construct file path
+        // Construct file path (all aides are now files)
         let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let aide_dir = PathBuf::from(&home_dir).join(".aide");
         let file_path = aide_dir.join(format!("{}.txt", actual_aide_name));
@@ -874,21 +904,20 @@ impl Database {
 
     pub fn get_all_aides(&self) -> Result<Vec<AideItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT a.name, a.aide_type, 
+            "SELECT a.name,
                     GROUP_CONCAT(d.input_text, '|||') as all_inputs,
                     GROUP_CONCAT(d.command_output, '|||') as all_outputs
              FROM aides a 
              LEFT JOIN data d ON a.id = d.aide_id 
-             GROUP BY a.name, a.aide_type
+             GROUP BY a.name
              ORDER BY a.name"
         )?;
         
         let rows = stmt.query_map([], |row| {
             Ok(AideItem {
                 name: row.get(0)?,
-                aide_type: row.get(1)?,
-                input_text: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                command_output: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                input_text: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                command_output: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             })
         })?;
         
@@ -900,22 +929,242 @@ impl Database {
         Ok(aides)
     }
 
+    pub fn get_all_configs(&self) -> Result<Vec<ConfigItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT key_name, value, description, created_at, updated_at 
+             FROM config_data 
+             ORDER BY key_name"
+        )?;
+        
+        let rows = stmt.query_map([], |row| {
+            Ok(ConfigItem {
+                key_name: row.get(0)?,
+                value: row.get(1)?,
+                description: row.get::<_, Option<String>>(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        
+        let mut configs = Vec::new();
+        for row in rows {
+            configs.push(row?);
+        }
+        
+        Ok(configs)
+    }
+
+    pub fn set_config(&mut self, key: &str, value: &str) -> Result<()> {
+        // Use fuzzy matching to find existing config key
+        let fuzzy_result = self.find_fuzzy_config_match(key)?;
+        
+        let actual_config_key = match fuzzy_result {
+            FuzzyMatchResult { exact_match: true, suggested_name: Some(name), .. } => {
+                // Exact match found, update existing config
+                println!("Updating existing config key '{}'", name);
+                name
+            }
+            FuzzyMatchResult { suggested_name: Some(suggestion), score: Some(score), .. } => {
+                if score >= FUZZY_MATCH_THRESHOLD {
+                    if ask_user_confirmation(key, &suggestion) {
+                        // User confirmed, update existing config
+                        println!("Updating existing config key '{}'", suggestion);
+                        suggestion
+                    } else {
+                        // User declined, create new config with original key
+                        println!("Creating new config key '{}'", key);
+                        key.to_string()
+                    }
+                } else {
+                    // Score too low, create new config
+                    println!("Creating new config key '{}'", key);
+                    key.to_string()
+                }
+            }
+            _ => {
+                // No suggestions, create new config
+                println!("Creating new config key '{}'", key);
+                key.to_string()
+            }
+        };
+
+        // Check if config already exists
+        let existing_value: Option<String> = self.conn.query_row(
+            "SELECT value FROM config_data WHERE key_name = ?1",
+            [&actual_config_key],
+            |row| Ok(row.get(0)?),
+        ).optional()?;
+
+        if let Some(old_value) = existing_value {
+            // Update existing config
+            self.conn.execute(
+                "UPDATE config_data SET value = ?1, updated_at = CURRENT_TIMESTAMP WHERE key_name = ?2",
+                [value, &actual_config_key],
+            )?;
+            println!("Config '{}' updated from '{}' to '{}'", actual_config_key, old_value, value);
+        } else {
+            // Insert new config
+            self.conn.execute(
+                "INSERT INTO config_data (key_name, value) VALUES (?1, ?2)",
+                [&actual_config_key, value],
+            )?;
+            println!("Config '{}' set to '{}'", actual_config_key, value);
+            
+            // Use incremental update instead of full rebuild
+            if let Some(ref mut index) = self.config_index {
+                index.add_entity(actual_config_key.to_string())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn get_config(&self, key: &str) -> Result<Option<String>> {
+        // Use fuzzy matching to find config key
+        let fuzzy_result = self.find_fuzzy_config_match(key)?;
+        
+        let actual_config_key = match fuzzy_result {
+            FuzzyMatchResult { exact_match: true, suggested_name: Some(name), .. } => name,
+            FuzzyMatchResult { suggested_name: Some(suggestion), score: Some(score), .. } => {
+                if score >= FUZZY_MATCH_THRESHOLD {
+                    if ask_user_confirmation(key, &suggestion) {
+                        suggestion
+                    } else {
+                        println!("Operation cancelled.");
+                        return Ok(None);
+                    }
+                } else {
+                    println!("Config key '{}' not found.", key);
+                    return Ok(None);
+                }
+            }
+            _ => {
+                println!("Config key '{}' not found.", key);
+                return Ok(None);
+            }
+        };
+
+        let value: Option<String> = self.conn.query_row(
+            "SELECT value FROM config_data WHERE key_name = ?1",
+            [&actual_config_key],
+            |row| Ok(row.get(0)?),
+        ).optional()?;
+
+        if let Some(ref val) = value {
+            println!("Config '{}' = '{}'", actual_config_key, val);
+        }
+
+        Ok(value)
+    }
+
+    pub fn list_configs(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT key_name, value, description, created_at, updated_at 
+             FROM config_data 
+             ORDER BY key_name"
+        )?;
+        
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,  // key_name
+                row.get::<_, String>(1)?,  // value
+                row.get::<_, Option<String>>(2)?,  // description
+                row.get::<_, String>(3)?,  // created_at
+                row.get::<_, String>(4)?,  // updated_at
+            ))
+        })?;
+        
+        println!("Configuration:");
+        println!("--------------");
+        for row in rows {
+            let (key_name, value, description, created_at, updated_at) = row?;
+            println!("{} = {}", key_name, value);
+            if let Some(desc) = description {
+                println!("  Description: {}", desc);
+            }
+            println!("  Created: {} | Updated: {}", created_at, updated_at);
+            println!();
+        }
+        
+        Ok(())
+    }
+
+    pub fn delete_config(&mut self, key: &str) -> Result<()> {
+        // Use fuzzy matching to find config key
+        let fuzzy_result = self.find_fuzzy_config_match(key)?;
+        
+        let actual_config_key = match fuzzy_result {
+            FuzzyMatchResult { exact_match: true, suggested_name: Some(name), .. } => name,
+            FuzzyMatchResult { suggested_name: Some(suggestion), score: Some(score), .. } => {
+                if score >= FUZZY_MATCH_THRESHOLD {
+                    if ask_user_confirmation(key, &suggestion) {
+                        suggestion
+                    } else {
+                        println!("Operation cancelled.");
+                        return Ok(());
+                    }
+                } else {
+                    println!("Config key '{}' not found.", key);
+                    return Ok(());
+                }
+            }
+            _ => {
+                println!("Config key '{}' not found.", key);
+                return Ok(());
+            }
+        };
+
+        let rows_affected = self.conn.execute(
+            "DELETE FROM config_data WHERE key_name = ?1",
+            [&actual_config_key],
+        )?;
+
+        if rows_affected > 0 {
+            println!("Config '{}' deleted successfully", actual_config_key);
+            // Use incremental removal instead of full rebuild
+            if let Some(ref mut index) = self.config_index {
+                index.remove_entity(&actual_config_key)?;
+            }
+        } else {
+            println!("Config '{}' not found in database", actual_config_key);
+        }
+
+        Ok(())
+    }
+
+    pub fn update_config_value(&mut self, key: &str, value: &str) -> Result<()> {
+        let rows_affected = self.conn.execute(
+            "UPDATE config_data SET value = ?1, updated_at = CURRENT_TIMESTAMP WHERE key_name = ?2",
+            [value, key],
+        )?;
+
+        if rows_affected > 0 {
+            println!("Config '{}' updated to '{}'", key, value);
+        } else {
+            println!("Config key '{}' not found", key);
+        }
+
+        Ok(())
+    }
+
     // Clear all data and rebuild indexes
     pub fn clear_all_data(&mut self) -> Result<()> {
         // Clear all data from tables
         self.conn.execute("DELETE FROM data", [])?;
         self.conn.execute("DELETE FROM tasks", [])?;
         self.conn.execute("DELETE FROM aides", [])?;
+        self.conn.execute("DELETE FROM config_data", [])?;
         
-        // Recreate default task_log aide
+        // Recreate default task_log aide if it doesn't exist
         let _ = self.conn.execute(
-            "INSERT OR IGNORE INTO aides (name, aide_type) VALUES ('task_log', 'file')",
+            "INSERT OR IGNORE INTO aides (name) VALUES ('task_log')",
             [],
         );
         
         // Rebuild indexes (will be empty now)
         self.rebuild_task_index()?;
         self.rebuild_aide_index()?;
+        self.rebuild_config_index()?;
         
         println!("All data cleared successfully!");
         Ok(())

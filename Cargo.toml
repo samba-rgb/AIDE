@@ -11,3 +11,15 @@ anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 ratatui = "0.28"
 crossterm = "0.27"
+tokio = { version = "1.37", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+clap_complete = "4.4"
+log = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.dev]
+incremental = true

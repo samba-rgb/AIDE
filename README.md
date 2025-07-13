@@ -1,6 +1,6 @@
 # Aide - Terminal-Based Knowledge Management Tool
 
-A powerful, database-driven terminal tool for managing tasks, commands, and file-based knowledge with an intuitive TUI interface.
+A powerful, database-driven terminal tool for managing tasks, commands, configurations, and file-based knowledge with an intuitive TUI interface and intelligent fuzzy matching.
 
 ## Features
 
@@ -16,12 +16,24 @@ A powerful, database-driven terminal tool for managing tasks, commands, and file
 - Fuzzy search across all stored content
 - Built-in text editor with full cursor navigation
 
+### ⚙️ Configuration Management
+- Store and manage application configurations with key-value pairs
+- TF-IDF powered fuzzy matching for config keys
+- Interactive config editing through TUI
+- Automatic config indexing with incremental updates
+
 ### 🖥️ Terminal User Interface (TUI)
 - Interactive interface built with ratatui
-- Tabbed navigation between Tasks and Aides
+- **Three-tab navigation**: Tasks, Aides, and Configs
 - Real-time content preview in right panel
 - Built-in text editor (no external dependencies)
 - Popup dialogs for quick actions
+
+### 🧠 Intelligent Fuzzy Matching
+- **TF-IDF Algorithm**: Advanced text similarity scoring
+- **Incremental Indexing**: Efficient updates without full rebuilds
+- **Smart Suggestions**: Context-aware typo correction
+- **Universal Search**: Works across tasks, aides, and configs
 
 ## Installation
 
@@ -197,18 +209,26 @@ aide task-log-update <task_name> <text>  # Add timestamped log entry
 ### Aide Commands
 ```bash
 # Aide management
-aide create <name> <type>                # Create aide (type: text|file)
+aide create <name>                       # Create aide
 aide add <name> <content>                # Add content to aide
 aide add <name> -p <file_path>           # Add content from file to aide
-aide write <name>                        # Open file aide in vim/vi/nano editor
+aide write <name>                        # Open aide in editor
 aide aide-list                          # List all aides
 aide search <text>                       # Fuzzy search content
-aide command <text>                      # Search by aide name + content
+```
+
+### Configuration Commands
+```bash
+# Configuration management
+aide set <key> <value>                   # Set configuration value
+aide get <key>                           # Get configuration value
+aide config-list                        # List all configurations
+aide config-delete <key>                # Delete configuration key
 ```
 
 ### System Commands
 ```bash
-aide reset                               # Reset all data (WARNING: Deletes all tasks and aides)
+aide reset                               # Reset all data (WARNING: Deletes everything)
 aide clear                               # Clear all data (same as reset)
 ```
 
@@ -221,7 +241,7 @@ aide                                     # Default: launch TUI
 ## TUI Navigation
 
 ### Main Interface
-- **Tab/Shift+Tab**: Switch between Tasks and Aides tabs
+- **Tab/Shift+Tab**: Switch between Tasks, Aides, and Configs tabs
 - **↑/↓**: Navigate items in current tab
 - **Enter**: Edit selected item
 - **r**: Refresh data
@@ -235,6 +255,11 @@ aide                                     # Default: launch TUI
 ### Aides Tab
 - **e**: Quick edit aide content
 - **Enter**: Full edit in built-in editor
+
+### Configs Tab
+- **Enter**: Edit config value (popup editor)
+- **c**: Quick edit config value
+- **r**: Refresh config list
 
 ### Built-in Text Editor
 - **Ctrl+S**: Save and close
@@ -259,46 +284,6 @@ File aides create actual files on your filesystem:
 - Files can be edited with any external editor
 - Perfect for logs, notes, and documentation
 
-## File Structure
-
-Aide creates the following directory structure in your home directory:
-
-```
-~/.aide/
-├── .aide.db              # SQLite database
-├── tasks/                # Task log files
-│   ├── task1.txt
-│   └── task2.txt
-├── work_log.txt          # File aide content
-└── commands.txt          # Another file aide
-```
-
-### Task Files
-Located in `~/.aide/tasks/`, each task gets its own log file:
-```
-Task: implement_authentication
-Status: in_progress
-Priority: 2
-Created: 2025-07-07 10:30:24
-
---- Task Log ---
-[2025-07-07 11:29:17] Completed user login flow
-[2025-07-07 12:15:32] Working on password validation
-```
-
-### File Aide Files
-File aides create single files in `~/.aide/`:
-```
-Aide: work_log
-Type: file
-Created: 2025-07-07 10:30:24
-
---- Entries ---
-
-[2025-07-07 11:30:00] Today's standup notes and meeting updates
-[2025-07-07 14:15:22] Completed sprint planning session
-```
-
 ## Database Schema
 
 Aide uses SQLite with the following tables:
@@ -306,7 +291,6 @@ Aide uses SQLite with the following tables:
 ### `aides`
 - `id`: Primary key
 - `name`: Aide name (unique)
-- `aide_type`: "text" or "file"
 
 ### `data`
 - `id`: Primary key
@@ -322,9 +306,35 @@ Aide uses SQLite with the following tables:
 - `task_log_file_path`: Path to log file
 - `created_at`: Timestamp
 
+### `config_data`
+- `id`: Primary key
+- `key_name`: Configuration key (unique)
+- `value`: Configuration value
+- `description`: Optional description
+- `created_at`: Creation timestamp
+- `updated_at`: Last update timestamp
+
 ## Examples
 
-### Daily Workflow
+### Configuration Management
+```bash
+# Set application configurations
+aide set database_url "sqlite:///app.db"
+aide set api_endpoint "https://api.example.com"
+aide set debug_mode "true"
+
+# Get configuration values (with fuzzy matching)
+aide get db_url          # Suggests "database_url"
+aide get api             # Suggests "api_endpoint"
+
+# List all configurations
+aide config-list
+
+# Delete configuration
+aide config-delete debug_mode
+```
+
+### Daily Workflow with All Features
 ```bash
 # Morning standup
 aide task-log-update "current_sprint" "Daily standup: working on API endpoints"
@@ -332,61 +342,82 @@ aide task-log-update "current_sprint" "Daily standup: working on API endpoints"
 # Store useful commands
 aide add commands "docker logs -f container_name"
 
+# Set project configurations
+aide set project_name "awesome_app"
+aide set git_remote "origin"
+
 # Create meeting notes
-aide add work_log "Team meeting 2025-07-07: Discussed Q3 roadmap and priorities"
+aide add work_log "Team meeting 2025-07-09: Discussed Q3 roadmap and priorities"
 
 # Update task status
 aide task-status "api_development" "in_progress"
 
-# Quick search
+# Quick search across everything
 aide search "docker"
-# Output: Found match in aide 'commands': docker logs -f container_name
-#         Output: [2025-07-07 10:30:24] docker logs -f container_name
+aide get project    # Fuzzy matches "project_name"
 ```
 
-### Text Aide Usage
+## Advanced Features
+
+### TF-IDF Fuzzy Matching System
+Aide implements a sophisticated fuzzy matching system:
+
+#### **Algorithm Features**
+- **TF-IDF Scoring**: Term Frequency-Inverse Document Frequency for semantic similarity
+- **String Similarity**: Character-based matching for typos and abbreviations
+- **Combined Scoring**: Weighted average of TF-IDF (30%) and string similarity (70%)
+- **Threshold-based Matching**: Configurable similarity threshold (default: 0.3)
+
+#### **Incremental Indexing**
+- **O(1) Additions**: New items added without rebuilding entire index
+- **Smart Vocabulary**: Dynamic vocabulary expansion for new terms
+- **IDF Recalculation**: Efficient updates only when necessary
+- **Memory Efficient**: Existing vectors remain untouched during updates
+
+#### **Universal Application**
+- **Tasks**: Fuzzy matching for task names
+- **Aides**: Intelligent aide name resolution
+- **Configs**: Smart config key suggestions
+- **Cross-Entity**: Consistent behavior across all data types
+
+#### **User Experience**
 ```bash
-# Create and populate a commands aide
-aide create commands text
-aide add commands "ssh user@production-server.com"
-aide add commands "docker ps -a"
-aide add commands "tail -f /var/log/nginx/access.log"
+# Typo correction
+aide get databse_url
+# Output: 'databse_url' not found. Did you mean 'database_url'? (y/n):
 
-# Search for specific commands
-aide search "ssh"
-aide search "docker"
+# Partial matching
+aide task "auth"
+# Output: 'auth' not found. Did you mean 'implement_authentication'? (y/n):
+
+# Abbreviation support
+aide add cmds "new command"
+# Output: 'cmds' not found. Did you mean 'commands'? (y/n):
 ```
 
-### File Aide Usage
-```bash
-# Create and populate a meeting notes aide
-aide create meeting_notes file
-aide add meeting_notes "Weekly team sync - discussed new features"
-aide add meeting_notes "Sprint planning - estimated 45 story points"
-
-# The content is stored in ~/.aide/meeting_notes.txt
-# You can also edit it directly: vim ~/.aide/meeting_notes.txt
-```
-
-### TUI Workflow
-1. Launch: `aide`
-2. Navigate to Tasks tab
-3. Select task and press `p` to change priority
-4. Switch to Aides tab with Tab
-5. Select aide and press Enter to edit content
-6. Use built-in editor to modify content
-7. Save with Ctrl+S
+### Performance Optimizations
+- **Incremental Updates**: No full index rebuilds on insertions
+- **Lazy Loading**: TF-IDF indexes built on demand
+- **Memory Caching**: In-memory indexes for fast lookups
+- **Database Efficiency**: SQLite with proper indexing
 
 ## Configuration
 
-### Default Aides
+### Default Data
 Aide automatically creates:
-- `task_log` (file type): For task-related files
+- `task_log` aide: For task-related files
+- Empty TF-IDF indexes for tasks, aides, and configs
 
 ### File Locations
 - Database: `~/.aide/.aide.db`
 - Task files: `~/.aide/tasks/`
-- File aide content: `~/.aide/{aide_name}.txt`
+- Aide content: `~/.aide/{aide_name}.txt`
+
+### TF-IDF Settings
+- **Fuzzy Match Threshold**: 0.3 (30% similarity required)
+- **String Weight**: 70% (character-based similarity)
+- **TF-IDF Weight**: 30% (semantic similarity)
+- **Vocabulary Growth**: Dynamic expansion
 
 ## Troubleshooting
 
@@ -414,19 +445,37 @@ aide aide-list    # See all aides and entry counts
 aide task-list    # See all tasks with metadata
 ```
 
-## Advanced Features
+## LLM Model Configuration
 
-### Fuzzy Matching
-Aide uses TF-IDF based fuzzy matching for task and aide names:
-- Typos are automatically corrected with user confirmation
-- Similar names are suggested when exact matches aren't found
-- Threshold-based matching ensures relevant suggestions
+Aide uses an LLM (Large Language Model) for command generation. You can configure the model and endpoint using environment variables:
 
-### Timestamped Entries
-All content added to aides is automatically timestamped:
-- Helps track when entries were created
-- Useful for logs and historical data
-- Searchable by content and timestamp
+- `OLLAMA_MODEL_NAME`: Set the model name (default: `qwen2.5-coder:0.5b`)
+- `OLLAMA_BASE_URL`: Set the Ollama API base URL (default: `http://localhost:11434`)
+
+### Example: Change Model
+
+```bash
+export OLLAMA_MODEL_NAME="your-model-name"
+export OLLAMA_BASE_URL="http://localhost:11434"
+./aide ask "your question"
+```
+
+If these variables are not set, Aide will use the default values.
+
+## LLM Model Environment Variables
+
+Aide uses environment variables to configure the LLM model for command generation. You can change these variables in your terminal before running aide:
+
+```bash
+export OLLAMA_MODEL_NAME="your-model-name"
+export OLLAMA_BASE_URL="http://localhost:11434"
+./aide ask "your question"
+```
+
+- `OLLAMA_MODEL_NAME`: Sets the model name (default: `qwen2.5-coder:0.5b`)
+- `OLLAMA_BASE_URL`: Sets the Ollama API base URL (default: `http://localhost:11434`)
+
+If these variables are not set, Aide will use the default values. This allows you to easily switch models or endpoints for different use cases.
 
 ## Contributing
 
@@ -445,7 +494,16 @@ Aide is built with:
 
 ## Changelog
 
-### Version 0.1.0 (Current)
+### Version 0.2.0 (Current)
+- **NEW**: Configuration management system with `set`, `get`, `config-list`, `config-delete` commands
+- **NEW**: Third "Configs" tab in TUI interface
+- **NEW**: TF-IDF powered fuzzy matching for all entity types
+- **NEW**: Incremental indexing system for performance
+- **IMPROVED**: Universal fuzzy matching across tasks, aides, and configs
+- **IMPROVED**: Better typo correction and suggestion system
+- **ENHANCED**: More efficient database operations
+
+### Version 0.1.0
 - Initial release
 - Task management with priority and status
 - Text and file aide types
@@ -454,5 +512,62 @@ Aide is built with:
 - File creation for file-type aides
 - Task log updates with timestamps
 - Built-in text editor
-- TF-IDF based fuzzy matching
 - Reset/clear functionality
+
+## Build Optimization Tips
+
+To optimize your Rust build for performance and faster compilation:
+
+1. **Release Mode**: Always build with release mode for production binaries:
+   ```bash
+   cargo build --release
+   ```
+
+2. **Enable LTO (Link Time Optimization)**: Add this to your `Cargo.toml`:
+   ```toml
+   [profile.release]
+   lto = true
+   ```
+
+3. **Incremental Compilation**: For faster development builds, enable incremental compilation:
+   ```toml
+   [profile.dev]
+   incremental = true
+   ```
+
+4. **Codegen Units**: For maximum optimization, set codegen-units to 1 (may slow build):
+   ```toml
+   [profile.release]
+   codegen-units = 1
+   ```
+
+5. **Keep Dependencies Lean**: Remove unused dependencies and keep them updated.
+
+6. **Clean Old Artifacts**: Occasionally run:
+   ```bash
+   cargo clean
+   ```
+
+7. **Use Rustup Toolchain**: Ensure you are using the latest stable toolchain:
+   ```bash
+   rustup update
+   ```
+
+These steps will help you achieve faster and more efficient builds on Linux.
+
+### Shell Completion Scripts
+
+You can generate shell completion scripts for aide using the following command:
+
+```bash
+aide completions <shell>
+```
+
+Replace `<shell>` with your shell type (e.g., `bash`, `zsh`, `fish`, `elvish`, `powershell`).
+
+Example for bash:
+```bash
+aide completions bash > /etc/bash_completion.d/aide
+```
+
+This enables tab-completion for aide commands in your shell.

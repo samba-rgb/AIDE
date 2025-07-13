@@ -242,3 +242,120 @@ fn calculate_string_similarity(input: &str, target: &str) -> f64 {
     
     (common_chars as f64) / (max_len as f64)
 }
+
+impl TfIdfIndex {
+    /// Add a single new entity to the existing index
+    pub fn add_entity(&mut self, entity_name: String) -> Result<()> {
+        // Check if entity already exists
+        if self.entity_names.contains(&entity_name) {
+            return Ok(());
+        }
+        
+        let tokens = tokenize(&entity_name);
+        let mut new_words = Vec::new();
+        
+        // Add new words to vocabulary
+        for token in &tokens {
+            if !self.vocabulary.contains_key(token) {
+                let word_id = self.vocabulary.len();
+                self.vocabulary.insert(token.clone(), word_id);
+                self.document_frequencies.push(0.0);
+                new_words.push(word_id);
+            }
+        }
+        
+        // Update document frequencies for words in this document
+        let mut unique_tokens = std::collections::HashSet::new();
+        for token in &tokens {
+            if let Some(&word_id) = self.vocabulary.get(token) {
+                unique_tokens.insert(word_id);
+            }
+        }
+        
+        for &word_id in &unique_tokens {
+            self.document_frequencies[word_id] += 1.0;
+        }
+        
+        // Calculate TF-IDF vector for new document
+        let tf = calculate_tf(&tokens, &self.vocabulary);
+        let mut tfidf_vector = HashMap::new();
+        
+        self.total_docs += 1;
+        
+        for (&word_id, &tf_val) in &tf {
+            let df = self.document_frequencies[word_id];
+            let idf = (self.total_docs as f64 / (df + 1.0)).ln();
+            tfidf_vector.insert(word_id, tf_val * idf);
+        }
+        
+        // Add to index
+        self.tfidf_vectors.push(tfidf_vector);
+        self.entity_names.push(entity_name);
+        
+        // Only recalculate IDF for affected documents (containing new words)
+        if !new_words.is_empty() {
+            self.recalculate_idf_for_new_words(&new_words)?;
+        }
+        
+        Ok(())
+    }
+    
+    /// Remove an entity from the index
+    pub fn remove_entity(&mut self, entity_name: &str) -> Result<bool> {
+        if let Some(index) = self.entity_names.iter().position(|name| name == entity_name) {
+            // Update document frequencies
+            let tokens = tokenize(entity_name);
+            let mut unique_tokens = std::collections::HashSet::new();
+            for token in &tokens {
+                if let Some(&word_id) = self.vocabulary.get(token) {
+                    unique_tokens.insert(word_id);
+                }
+            }
+            
+            for &word_id in &unique_tokens {
+                self.document_frequencies[word_id] -= 1.0;
+            }
+            
+            // Remove from collections
+            self.entity_names.remove(index);
+            self.tfidf_vectors.remove(index);
+            self.total_docs -= 1;
+            
+            // Recalculate IDF for all remaining documents (since total_docs changed)
+            self.recalculate_all_idf()?;
+            
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    
+    fn recalculate_idf_for_new_words(&mut self, new_word_ids: &[usize]) -> Result<()> {
+        for tfidf_vector in &mut self.tfidf_vectors {
+            for &word_id in new_word_ids {
+                if let Some(tf_val) = tfidf_vector.get(&word_id) {
+                    let df = self.document_frequencies[word_id];
+                    let new_idf = (self.total_docs as f64 / (df + 1.0)).ln();
+                    tfidf_vector.insert(word_id, tf_val * new_idf);
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    fn recalculate_all_idf(&mut self) -> Result<()> {
+        for (doc_idx, tfidf_vector) in self.tfidf_vectors.iter_mut().enumerate() {
+            let entity_name = &self.entity_names[doc_idx];
+            let tokens = tokenize(entity_name);
+            let tf = calculate_tf(&tokens, &self.vocabulary);
+            
+            tfidf_vector.clear();
+            for (&word_id, &tf_val) in &tf {
+                let df = self.document_frequencies[word_id];
+                let idf = (self.total_docs as f64 / (df + 1.0)).ln();
+                tfidf_vector.insert(word_id, tf_val * idf);
+            }
+        }
+        Ok(())
+    }
+}

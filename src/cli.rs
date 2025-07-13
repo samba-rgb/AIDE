@@ -9,12 +9,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Create a new aide type
+    /// Create a new aide
     Create { 
         #[arg(value_name = "NAME")]
         name: String,
-        #[arg(value_name = "TYPE")]
-        aide_type: String,
     },
     /// Add data to an aide
     Add {
@@ -26,16 +24,38 @@ pub enum Commands {
         #[arg(short = 'p', long = "path")]
         path: Option<String>,
     },
+
+    /// Set a configuration value
+    Set {
+        #[arg(value_name = "KEY")]
+        key: String,
+
+        #[arg(value_name = "VALUE")]    
+        value: String,
+    },
+
+    /// Get a configuration value
+    Get {
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
+
+    /// List all configuration keys and values
+    ConfigList,
+
+    /// Delete a configuration key
+    ConfigDelete {
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
+
     /// Search for data by input text
     Search {
         #[arg(value_name = "INPUT_TEXT")]
         input_text: String,
     },
-    /// Search for data by command and input text
-    Command {
-        #[arg(value_name = "INPUT_TEXT")]
-        input_text: String,
-    },
+
+
     /// Create or edit a task
     Task {
         #[arg(value_name = "TASK_NAME")]
@@ -82,4 +102,16 @@ pub enum Commands {
     },
     /// Launch TUI interface
     Tui,
+
+    /// Ask a question to the LLM
+    Ask {
+        #[arg(value_name = "QUESTION")]
+        question: String,
+    },
+
+    /// Generate shell completion script
+    Completions {
+        #[arg(value_name = "SHELL")]
+        shell: String,
+    },
 }
